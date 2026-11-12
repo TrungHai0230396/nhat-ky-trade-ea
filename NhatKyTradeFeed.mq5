@@ -10,7 +10,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Nhật Ký Trade"
 #property link      "https://nhatkytrade.com"
-#property version   "1.16"
+#property version   "1.17"
 #property description "Sends prices, candles, the account's balance, equity and number, and its open orders to Nhật Ký Trade."
 #property description "Places orders from the web only with AllowTrading = true. Never modifies or closes one."
 
@@ -137,7 +137,12 @@ string JsonField(string json, string key)
       return "";
    start += StringLen(pattern);
    int end = StringFind(json, "\"", start);
-   if(end < 0)
+   // An empty value ("hist":"") must read as "": StringSubstr with a length of
+   // 0 returns the REST of the string, so before 1.18 an empty "hist" read as
+   // "} and dropped the history request waiting in the EA one push after it
+   // came (owner's MT4, 12/11/2026), and an empty "jsince" read as non-empty
+   // and sent closed trades while auto-journal was off.
+   if(end <= start)
       return "";
    return StringSubstr(json, start, end - start);
   }
@@ -191,6 +196,10 @@ void QueueHistory(string req)
   {
    // The server hands an unanswered request out again after 45 s: same one, keep waiting.
    if(req == g_histReq)
+      return;
+   // Only a real request replaces the one waiting: "SYMBOL|TF|COUNT".
+   string parts[];
+   if(StringSplit(req, '|', parts) != 3)
       return;
    g_histReq = req;
    g_histTries = 0;

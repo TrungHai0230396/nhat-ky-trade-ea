@@ -10,7 +10,7 @@
 //+------------------------------------------------------------------+
 #property copyright "Nhật Ký Trade"
 #property link      "https://nhatkytrade.com"
-#property version   "1.17"
+#property version   "1.18"
 #property description "Sends prices, candles, the account's balance, equity and number, and its open orders to Nhật Ký Trade."
 #property description "Places orders from the web only with AllowTrading = true. Never modifies or closes one."
 #property strict
@@ -146,7 +146,12 @@ string JsonField(string json, string key)
       return "";
    start += StringLen(pattern);
    int end = StringFind(json, "\"", start);
-   if(end < 0)
+   // An empty value ("hist":"") must read as "": StringSubstr with a length of
+   // 0 returns the REST of the string, so before 1.18 an empty "hist" read as
+   // "} and dropped the history request waiting in the EA one push after it
+   // came (owner's MT4, 12/11/2026), and an empty "jsince" read as non-empty
+   // and sent closed trades while auto-journal was off.
+   if(end <= start)
       return "";
    return StringSubstr(json, start, end - start);
   }
@@ -190,42 +195,34 @@ string HistoryUrl()
 // the count stood still for HIST_STABLE_ROUNDS pushes with nothing loading,
 // or HIST_MAX_TRIES pushes (about a minute) have gone by.
 //
-// MT4 FETCHES OLDER BARS ONLY FOR A CHART (EA 1.17). Waiting was not enough:
-// with no gold chart open MT4 never asked the broker, and 1.16 would have sent
-// the same 23 bars a few seconds later. The owner had to open the chart and
-// press Home; now the EA does it: it opens a chart of that pair, scrolls it
-// to the oldest bar every push - Home, which is when MT4 asks the broker for
-// older ones - until the count stands still, then closes that chart. Only the
-// chart it opened: a reader's own charts are never scrolled or closed.
+//
+// THE EA DOES NOT OPEN OR SCROLL A CHART. 1.17 did: it opened a chart of the
+// pair and scrolled it to the oldest bar every push, as Home does, so MT4
+// would ask the broker for older bars. Measured on the owner's MT4
+// (12/11/2026): two minutes of that, not one bar more - 1008 H1 gold bars,
+// the oldest 11/09/2026, while the broker's own history starts 28/03/2025.
+// A chart scrolled from code fetches nothing; only the reader's own Home
+// press does, so the page and the status line ask for that instead.
 #define HIST_STABLE_ROUNDS 2
 #define HIST_MAX_TRIES     12
-#define HIST_CHART_STABLE  3   // pushes with no new bars, chart open, before sending
-#define HIST_CHART_TRIES   24  // about two minutes with the chart open, at most
 string g_histReq   = "";  // the series waiting: "XAUUSDm|H1|10000"
 int    g_histTries = 0;
 int    g_histLast  = -1;  // bars the last push copied
 int    g_histSame  = 0;   // pushes in a row with no new bars
-long   g_histChart = 0;   // the chart this EA opened to fetch older bars; 0 = none
-bool   g_histChartTried = false;
-
-void HistoryChartClose()
-  {
-   if(g_histChart != 0)
-      ChartClose(g_histChart);
-   g_histChart = 0;
-  }
 
 void QueueHistory(string req)
   {
    // The server hands an unanswered request out again after 45 s: same one, keep waiting.
    if(req == g_histReq)
       return;
-   HistoryChartClose();
+   // Only a real request replaces the one waiting: "SYMBOL|TF|COUNT".
+   string parts[];
+   if(StringSplit(req, '|', parts) != 3)
+      return;
    g_histReq = req;
    g_histTries = 0;
    g_histLast = -1;
    g_histSame = 0;
-   g_histChartTried = false;
   }
 
 void StepHistory()
@@ -265,38 +262,13 @@ void StepHistory()
    else
       g_histSame = 0;
    g_histLast = got;
-   // Short and still: open a chart, once, so MT4 asks the broker for more.
-   if(got < count && !g_histChartTried
-      && (g_histSame >= HIST_STABLE_ROUNDS || g_histTries >= HIST_MAX_TRIES))
+   if(got < count && g_histSame < HIST_STABLE_ROUNDS && g_histTries < HIST_MAX_TRIES)
      {
-      g_histChartTried = true;
-      g_histChart = ChartOpen(sym, g_tfs[k]);
-      if(g_histChart != 0)
-        {
-         // Off, or the next tick scrolls it back to the newest bar.
-         ChartSetInteger(g_histChart, CHART_AUTOSCROLL, false);
-         g_histTries = 0;
-         g_histSame = 0;
-         Print("history ", sym, " ", parts[1], ": ", got, " bars, opening a chart to fetch older ones");
-        }
-     }
-   bool wait = got < count
-               && (g_histChart != 0
-                   ? g_histSame < HIST_CHART_STABLE && g_histTries < HIST_CHART_TRIES
-                   : g_histSame < HIST_STABLE_ROUNDS && g_histTries < HIST_MAX_TRIES);
-   if(wait)
-     {
-      if(g_histChart != 0)
-        {
-         ChartNavigate(g_histChart, CHART_BEGIN, 0);
-         ChartRedraw(g_histChart);
-        }
       string n = IntegerToString(got > 0 ? got : 0);
       Show(Msg("đang chờ MT4 tải lịch sử " + sym + " " + parts[1] + " · " + n + " nến",
                "waiting for MT4 to load " + sym + " " + parts[1] + " history · " + n + " bars"));
       return;
      }
-   HistoryChartClose();
    g_histReq = "";
    Print("history ", sym, " ", parts[1], ": sending ", got, " of ", count, " bars");
    if(got > 0)
@@ -336,9 +308,9 @@ void SendRates(string sym, string tfName, int count, MqlRates &rates[], int got)
    if(status != 200)
       Failed(status);
    else if(got < count)
-      // The EA already opened a chart and scrolled it back: this is what the broker gave.
-      Show(Msg("đã gửi lịch sử " + sym + " " + tfName + " · " + IntegerToString(got) + " nến - sàn chỉ cho MT4 tải chừng này",
-               "history sent " + sym + " " + tfName + " · " + IntegerToString(got) + " bars - all the broker let MT4 fetch"));
+      // All MT4 holds. Older bars come only when the reader scrolls a chart back.
+      Show(Msg("đã gửi lịch sử " + sym + " " + tfName + " · " + IntegerToString(got) + " nến - MT4 chỉ có chừng này. Muốn thêm: mở biểu đồ " + sym + " " + tfName + ", bấm Home vài lần, rồi Tải lại trên web",
+               "history sent " + sym + " " + tfName + " · " + IntegerToString(got) + " bars - all MT4 has. For more: open a " + sym + " " + tfName + " chart, press Home a few times, then Reload on the web"));
    else
       Show(Msg("đã gửi lịch sử " + sym + " " + tfName + " · " + IntegerToString(got) + " nến",
                "history sent " + sym + " " + tfName + " · " + IntegerToString(got) + " bars"));
@@ -972,8 +944,6 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
-   // A chart opened to fetch history must not outlive the EA that opened it.
-   HistoryChartClose();
    Comment("");
   }
 

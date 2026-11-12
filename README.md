@@ -6,8 +6,8 @@
 
 | File | Dùng cho | Phiên bản |
 |---|---|---|
-| `NhatKyTradeFeed.mq4` | MetaTrader 4 | 1.17 |
-| `NhatKyTradeFeed.mq5` | MetaTrader 5 | 1.16 |
+| `NhatKyTradeFeed.mq4` | MetaTrader 4 | 1.18 |
+| `NhatKyTradeFeed.mq5` | MetaTrader 5 | 1.17 |
 
 ## EA gửi gì lên app
 
@@ -50,8 +50,8 @@ This is the complete source of the EA that [Nhật Ký Trade](https://nhatkytrad
 
 | File | For | Version |
 |---|---|---|
-| `NhatKyTradeFeed.mq4` | MetaTrader 4 | 1.17 |
-| `NhatKyTradeFeed.mq5` | MetaTrader 5 | 1.16 |
+| `NhatKyTradeFeed.mq4` | MetaTrader 4 | 1.18 |
+| `NhatKyTradeFeed.mq5` | MetaTrader 5 | 1.17 |
 
 ## What the EA sends to the app
 
